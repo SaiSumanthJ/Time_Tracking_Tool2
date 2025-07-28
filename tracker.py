@@ -1,191 +1,183 @@
-import customtkinter as ctk
+
+# --- app.py ---
 import os
-
-
-import requests
-import threading
-import time
-from PIL import ImageGrab
-import io
-import socket
+import json
 import uuid
-from datetime import datetime
+import time
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
+import sendgrid
+from sendgrid.helpers.mail import Mail
 
+# --- Configuration ---
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'noreply@yourcompany.com')
+TRACKER_APP_FILENAME = 'tracker_app.zip'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get('DATA_DIR', os.path.join(BASE_DIR, 'backend'))
+STORAGE_FILE = os.path.join(DATA_DIR, 'storage.json')
+SCREENSHOTS_DIR = os.path.join(DATA_DIR, 'screenshots')
 
-API_BASE = "http://localhost:5000"
+# Ensure directories
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
 
+# Initialize Flask
+app = Flask(__name__, static_folder='static')
+CORS(app)
 
-def get_network_info():
-    ip = socket.gethostbyname(socket.gethostname())
-    mac = ':'.join(f'{(uuid.getnode() >> ele) & 0xff:02x}' for ele in range(0,48,8)[::-1])
-    return ip, mac
+# --- Helpers ---
+def load_data():
+    if not os.path.exists(STORAGE_FILE):
+        with open(STORAGE_FILE, 'w') as f:
+            json.dump({"employees": [], "projects": [], "tasks": [], "timeLogs": [], "screenshots": []}, f)
+    with open(STORAGE_FILE, 'r') as f:
+        return json.load(f)
 
+def save_data(data):
+    with open(STORAGE_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
-def take_screenshot(emp_id, emp_name, project_name):
-    try:
-        screenshot = ImageGrab.grab()
-        timestamp = datetime.now().isoformat()
-        safe_timestamp = timestamp.replace(":", "-").replace(".", "-")
+def generate_id():
+    return str(uuid.uuid4())
 
+def send_activation_email(employee):
+    activation_link = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/activate/{employee['id']}"
+    email_content = f"""
+    Hi {employee['name']},
+    
+    Please activate your account by clicking the link below:
+    {activation_link}
+    
+    Once activated, download the tracker here:
+    https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/static/{TRACKER_APP_FILENAME}
+    """
+    sg = sendgrid.SendGridAPIClient(SENDGRID_API_KEY)
+    message = Mail(
+        from_email=SENDER_EMAIL,
+        to_emails=employee['email'],
+        subject='Activate Your Time Tracker Account',
+        plain_text_content=email_content
+    )
+    sg.send(message)
+    print(f"Activation email sent to {employee['email']}")
 
-        # Folder Structure: screenshots/ProjectName/EmployeeName/
-        folder_path = f"backend/screenshots/{project_name}/{emp_name}"
-        os.makedirs(folder_path, exist_ok=True)
-
-
-        img_bytes = io.BytesIO()
-        screenshot.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
-
-
-        files = {'file': ('screenshot.png', img_bytes, 'image/png')}
-        data = {
-            'employeeId': emp_id,
-            'employeeName': emp_name,
-            'projectName': project_name,
-            'timestamp': safe_timestamp,
-            'permission': 'true'
-        }
-
-
-        response = requests.post(f"{API_BASE}/screenshot", files=files, data=data)
-        print(f"Screenshot Upload Response: {response.status_code} - {response.text}")
-
-
-    except Exception as e:
-        print(f"Failed to take/upload screenshot: {e}")
-
-
-def start_tracking(emp_id, emp_name, project_name, task_id, timer_label):
-    global tracking, start_time
-    tracking = True
-    start_time = datetime.now()
-    update_timer(timer_label, emp_id, emp_name, project_name, task_id)
-
-
-def update_timer(label, emp_id, emp_name, project_name, task_id):
-    if tracking:
-        elapsed = (datetime.now() - start_time).seconds
-        label.configure(text=f"Tracking: {elapsed}s")
-        if elapsed % 10 == 0:  # Take screenshot every 10 seconds
-            take_screenshot(emp_id, emp_name, project_name)
-        label.after(1000, update_timer, label, emp_id, emp_name, project_name, task_id)
-
-
-def stop_tracking(emp_id, emp_name, project_name, task_id):
-    global tracking, start_time
-    tracking = False
-    end_time = datetime.now()
-    duration = (end_time - start_time).seconds
-    ip, mac = get_network_info()
-
-
-    payload = {
-        "employeeId": emp_id,
-        "taskId": task_id,
-        "startTime": start_time.isoformat(),
-        "endTime": end_time.isoformat(),
-        "durationSeconds": duration,
-        "ip": ip,
-        "mac": mac
+# --- API Endpoints ---
+@app.route('/employee', methods=['POST'])
+def add_employee():
+    data_in = request.json
+    data = load_data()
+    emp = {
+        "id": generate_id(),
+        "name": data_in["name"],
+        "email": data_in["email"],
+        "active": False,
+        "createdAt": int(time.time() * 1000)
     }
-    requests.post(f"{API_BASE}/time", json=payload)
-    take_screenshot(emp_id, emp_name, project_name)
+    data['employees'].append(emp)
+    save_data(data)
+    send_activation_email(emp)
+    return jsonify(emp)
 
+@app.route('/employee', methods=['GET'])
+def get_employees():
+    data = load_data()
+    return jsonify(data['employees'])
 
-def main():
-    ctk.set_appearance_mode("System")
-    ctk.set_default_color_theme("blue")
+@app.route('/project', methods=['POST'])
+def add_project():
+    data_in = request.json
+    data = load_data()
+    proj = {
+        "id": generate_id(),
+        "name": data_in["name"],
+        "employeeIds": data_in.get("employeeIds", []),
+        "createdAt": int(time.time() * 1000)
+    }
+    data['projects'].append(proj)
 
+    task = {
+        "id": generate_id(),
+        "name": f"Default Task for {proj['name']}",
+        "projectId": proj['id'],
+        "employeeIds": data_in.get("employeeIds", []),
+        "createdAt": int(time.time() * 1000)
+    }
+    data['tasks'].append(task)
+    save_data(data)
+    return jsonify(proj)
 
-    app = ctk.CTk()
-    app.title("Time Tracker")
-    app.geometry("400x250")
+@app.route('/project', methods=['GET'])
+def get_projects():
+    data = load_data()
+    return jsonify(data['projects'])
 
+@app.route('/task', methods=['GET'])
+def get_tasks():
+    data = load_data()
+    return jsonify(data['tasks'])
 
-    id_label = ctk.CTkLabel(app, text="Enter your Employee ID:")
-    id_label.pack(pady=10)
-    id_entry = ctk.CTkEntry(app)
-    id_entry.pack(pady=5)
+@app.route('/time', methods=['POST'])
+def log_time():
+    data_in = request.json
+    data = load_data()
+    data['timeLogs'].append(data_in)
+    save_data(data)
+    return jsonify({"status": "Time logged successfully"})
 
+@app.route('/time', methods=['GET'])
+def get_time_logs():
+    data = load_data()
+    return jsonify(data['timeLogs'])
 
-    result_label = ctk.CTkLabel(app, text="")
-    result_label.pack(pady=5)
+@app.route('/screenshot', methods=['POST'])
+def upload_screenshot():
+    data_in = request.form
+    file = request.files['file']
+    employeeId = data_in['employeeId']
+    employeeName = data_in['employeeName'].replace(" ", "_")
+    projectName = data_in['projectName'].replace(" ", "_")
+    timestamp = data_in['timestamp']
+    permission = data_in['permission']
 
+    project_dir = os.path.join(SCREENSHOTS_DIR, projectName)
+    employee_dir = os.path.join(project_dir, employeeName)
+    os.makedirs(employee_dir, exist_ok=True)
 
-    def verify_and_start():
-        emp_id = id_entry.get().strip()
-        if not emp_id:
-            result_label.configure(text="Please enter a valid Employee ID", text_color="red")
-            return
+    filename = f"{employeeId}_{timestamp}.png"
+    filepath = os.path.join(employee_dir, filename)
+    file.save(filepath)
 
+    data = load_data()
+    data['screenshots'].append({
+        "employeeId": employeeId,
+        "employeeName": employeeName,
+        "projectName": projectName,
+        "timestamp": timestamp,
+        "permission": permission,
+        "filename": filepath
+    })
+    save_data(data)
 
-        try:
-            employees = requests.get(f"{API_BASE}/employee").json()
-            emp_data = next((e for e in employees if e['id'] == emp_id), None)
-            if not emp_data:
-                result_label.configure(text="Employee ID not found!", text_color="red")
-                return
-            emp_name = emp_data['name']
+    return jsonify({"status": "Screenshot saved"})
 
+@app.route('/screenshot', methods=['GET'])
+def get_screenshots():
+    data = load_data()
+    return jsonify(data['screenshots'])
 
-            projects = requests.get(f"{API_BASE}/project").json()
-            tasks = requests.get(f"{API_BASE}/task").json()
+@app.route('/activate/<emp_id>', methods=['GET'])
+def activate_employee(emp_id):
+    data = load_data()
+    emp = next((e for e in data['employees'] if e['id'] == emp_id), None)
+    if emp:
+        emp['active'] = True
+        save_data(data)
+        return f"<h1>Activation Successful!</h1><p>Hi {emp['name']}, you can now download the tracker app: <a href='/static/{TRACKER_APP_FILENAME}'>Download</a></p>"
+    else:
+        return "<h1>Invalid Activation Link</h1>"
 
-
-            assigned_projects = [p for p in projects if emp_id in p['employeeIds']]
-            if not assigned_projects:
-                result_label.configure(text="No projects assigned to this Employee ID", text_color="red")
-                return
-
-
-        except Exception as e:
-            result_label.configure(text=f"API Error: {str(e)}", text_color="red")
-            return
-
-
-        # Hide initial inputs
-        id_label.pack_forget()
-        id_entry.pack_forget()
-        verify_button.pack_forget()
-        result_label.pack_forget()
-
-
-        proj_to_task = {p['name']: next((t['id'] for t in tasks if t['projectId'] == p['id']), None) for p in assigned_projects}
-
-
-        dropdown = ctk.CTkComboBox(app, values=list(proj_to_task.keys()))
-        dropdown.pack(pady=10)
-
-
-        timer_label = ctk.CTkLabel(app, text="Timer: 0s")
-        timer_label.pack(pady=10)
-
-
-        def start_action():
-            selected_project_name = dropdown.get()
-            threading.Thread(target=start_tracking, args=(emp_id, emp_name, selected_project_name, proj_to_task[selected_project_name], timer_label), daemon=True).start()
-
-
-        def stop_action():
-            selected_project_name = dropdown.get()
-            stop_tracking(emp_id, emp_name, selected_project_name, proj_to_task[selected_project_name])
-
-
-        btn_start = ctk.CTkButton(app, text="Start Tracking", command=start_action)
-        btn_stop = ctk.CTkButton(app, text="Stop Tracking", command=stop_action)
-
-
-        btn_start.pack(pady=5)
-        btn_stop.pack(pady=5)
-
-
-    verify_button = ctk.CTkButton(app, text="Proceed", command=verify_and_start)
-    verify_button.pack(pady=5)
-
-
-    app.mainloop()
-
-
+# --- Main Entry Point ---
 if __name__ == "__main__":
-    main()
+    app.run(host='0.0.0.0', port=5000)
+
