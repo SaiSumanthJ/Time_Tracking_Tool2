@@ -10,8 +10,8 @@ import sendgrid
 from sendgrid.helpers.mail import Mail
 
 # --- Configuration ---
-SENDGRID_API_KEY = os.environ.get('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')
-SENDER_EMAIL = os.environ.get('saisumanth869@gmail.com', 'noreply@yourcompany.com')
+SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'noreply@yourcompany.com')
 TRACKER_APP_FILENAME = 'tracker_app.zip'
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get('DATA_DIR', os.path.join(BASE_DIR, 'backend'))
