@@ -5,20 +5,3 @@ pillow
 flask-cors
 gunicorn
 
-# --- render.yaml ---
-services:
-  - type: web
-    name: time-tracker-backend
-    env: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app
-    envVars:
-      - key: SENDGRID_API_KEY
-        sync: false
-      - key: SENDER_EMAIL
-        value: yourcompany@domain.com
-    disk:
-      name: data
-      mountPath: /data
-      sizeGB: 1
-
