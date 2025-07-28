@@ -174,10 +174,14 @@ def get_screenshots():
 def activate_employee(emp_id):
     data = load_data()
     emp = next((e for e in data['employees'] if e['id'] == emp_id), None)
-    if emp:
-        emp['active'] = True
-        save_data(data)
-        return f"<h1>Activation Successful!</h1><p>Hi {emp['name']}, you can now download the tracker app: <a href='/static/{TRACKER_APP_FILENAME}'>Download</a></p>"
+    if not emp:
+        return "<h1>Invalid Activation Link</h1>"
+    if emp.get('active', False):
+        return f"<h1>Already Activated</h1><p>Hi {emp['name']}, you have already activated your account. <a href='/static/{TRACKER_APP_FILENAME}'>Download Tracker App</a></p>"
+    emp['active'] = True
+    save_data(data)
+    return f"<h1>Activation Successful!</h1><p>Hi {emp['name']}, you can now download the tracker app: <a href='/static/{TRACKER_APP_FILENAME}'>Download</a></p>"
+
     else:
         return "<h1>Invalid Activation Link</h1>"
 
