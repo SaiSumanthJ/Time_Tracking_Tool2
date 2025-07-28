@@ -82,7 +82,11 @@ def add_employee():
 @app.route('/employee', methods=['GET'])
 def get_employees():
     data = load_data()
+    active_only = request.args.get('active', 'false').lower() == 'true'
+    if active_only:
+        return jsonify([e for e in data['employees'] if e.get('active', False)])
     return jsonify(data['employees'])
+
 
 @app.route('/project', methods=['POST'])
 def add_project():
